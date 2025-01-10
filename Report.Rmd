@@ -1,0 +1,1910 @@
+---
+title: "Predictive modeling and Regression analysis on adult census income data"
+author: ''
+date: ''
+output:
+  html_document:
+    toc: yes
+    df_print: paged
+  word_document:
+    toc: yes
+  pdf_document:
+    keep_tex: yes
+    toc: yes
+    pandoc_args: "--pdf-engine=xelatex"
+editor_options:
+  chunk_output_type: consolevv
+  markdown:
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = FALSE,
+	message = FALSE,
+	warning = FALSE
+)
+# Install required packages if not already installed
+required_packages <- c("dplyr", "fBasics", "summarytools", "reshape2", "ggplot2",
+                       "ggthemes", "ggpubr", "caret", "glmnet", "rsample", "ROCR",
+                       "pROC", "MLmetrics", "gridExtra", "nnet", "xgboost", "tidyverse","themis","mice","janitor","skimr","readr","VIM","maps","mapdata","sf","sp","rnaturalearth")
+
+# Check and install missing packages
+missing_packages <- required_packages[!(required_packages %in% installed.packages()[,"Package"])]
+if (length(missing_packages) > 0) {
+  install.packages(missing_packages, dependencies = TRUE)
+}
+
+
+# Load packages
+library(dplyr)
+library(fBasics)    #summary statistics (numeric)
+library(summarytools) #summary statistics (character)
+library(reshape2) #for melt function
+library(ggplot2)
+library(ggthemes)
+library(ggpubr)  #for ggarrange function
+library(caret)  #for encoding
+library(glmnet)   #for feature selection (R idge and Lasso)
+library(rsample)  #for initial_split 
+library(ROCR)  #for performance function and prediction function
+library(pROC) # Generate ROC curves
+library(MLmetrics) # F1 score calculation
+library(gridExtra) #for confusion matrix
+library(grid) #for confusion matrix
+library(nnet)
+library(xgboost)
+library(tidyverse)  
+library(themis)
+library(tidyr)
+library(readr)
+library(janitor)
+library(mice) # Imputatation 
+library(skimr)
+library(data.table)
+library(corrplot)
+
+#This is for map visuals
+library(maps)
+library(mapdata)
+library(sf)
+library(sp)
+
+```
+
+\pagebreak
+
+# 1. Aim of the Project
+
+The study aims to classify or predict whether an individual's income
+exceeds \$50K/yr using the Adult Census Income data. It employs logistic
+regression, artificial neural network, and XG boosting models to achieve
+this goal. The comparison of accuracy measures among these models is
+conducted to identify the most suitable one. Exploratory variables
+encompass numeric factors like final weight, capital gain, capital loss,
+and hours per week, alongside categorical variables such as age
+category, working class, education, marital status, occupation, race,
+and sex. Additionally, regression prediction analysis is performed on
+the same dataset to forecast "Hours per week" using other variables as
+predictors. This section encompasses estimating linear regression, Artificial
+neural network, and xgboost models, with a focus on comparing results based
+on RMSE.
+
+# 2. Data description
+
+The dataset utilized in this study comprises Adult Census Income data
+has been retrieved from
+<https://www.kaggle.com/datasets/uciml/adult-census-income/data> and has
+32561 observations of with 15 variables, encompassing a range of numeric
+and categorical variables. The numeric factors involve features like
+final weight, capital gain, capital loss, and hours per week, while
+categorical variables include age category, working class, education,
+marital status, occupation, race, and sex. These variables collectively
+contribute to the exploration and prediction of income levels exceeding
+\$50K/yr. Additionally, the dataset facilitates regression analysis to
+forecast "Hours per week" using various predictors from the same
+dataset, aiding in the understanding of factors influencing work hours.
+
+```{r Data Loading and cleanin, message=FALSE, include=FALSE}
+df <- read.csv("Adult Census.csv")
+head(df)
+
+dim(df)
+
+# Displaying the structure of the dataset for a detailed understanding of variable types
+str(df)
+
+# Providing summary statistics for each variable in the dataset
+summary(df)
+
+```
+
+## Variables Overview
+
+-   **age**: Numeric variable indicating the age of the individual.
+-   **workclass**: Categorical variable representing the employment
+    sector of the individual (e.g., Private, Self-emp, Government).
+-   **fnlwgt**: Final weight. The number of people the census believes
+    the entry represents. It's an integer.
+-   **education**: Categorical variable indicating the level of
+    education achieved by the individual (e.g., Bachelors, HS-grad).
+-   **education.num**: Numeric variable indicating the ordinal value for the level of education.
+-   **marital.status**: Categorical variable representing the marital
+    status of the individual (e.g., Married-civ-spouse, Never-married).
+-   **occupation**: Categorical variable indicating the type of
+    occupation of the individual (e.g., Tech-support, Craft-repair).
+-   **relationship**: Categorical variable representing the individual's
+    role in the family (e.g., Wife, Own-child).
+-   **race**: Categorical variable indicating the race of the individual
+    (e.g., White, Asian-Pac-Islander).
+-   **sex**: Categorical variable indicating the gender of the
+    individual (Male, Female).
+-   **capital.gain**: Numeric variable indicating income from investment
+    sources.
+-   **capital.loss**: Numeric variable indicating losses from investment
+    sources.
+-   **hours.per.week**: Numeric variable indicating the number of hours
+    the individual works per week.
+-   **native.country**: Categorical variable indicating the native
+    country of the individual (e.g., United-States, India).
+-   **income**: Categorical variable indicating whether the individual's
+    income exceeds \$50K per year. Typically represented as two classes:
+    '\<=50K' and '\>50K'.
+
+
+```{r}
+# Removing 'Education Num' as it is redudnant as it is also represented by education
+df <- df[ , !(names(df) %in% c("Education.num"))]
+```
+
+## 2.1 Missing Data and Duplicate data checks
+
+```{r}
+# Checking for duplicate rows (Duplication)
+duplicate_rows <- sum(duplicated(df))
+cat("Number of duplicate rows:", duplicate_rows, "\n\n")
+
+# Summarizing missing values in each column (Missing Values)
+missing_values <- colSums(is.na(df))
+print(missing_values)
+```
+
+```{r}
+# Checking for non-standard missing values including '?', 'NA', 'na', 'n/a', 'unknown', etc.
+
+# Initialize an empty data frame to store non-standard missing values
+non_standard_missing_values_df <- data.frame(
+  Column = character(),
+  Indicator = character(),
+  Count = numeric(),
+  stringsAsFactors = FALSE
+)
+
+missing_indicators <- c('?', 'na', 'n/a', 'unknown') # Removed 'NA' since it's an actual R NA value
+
+for (column in names(df)) {
+  if (is.character(df[[column]])) {  # checking only categorical columns
+    column_data <- tolower(trimws(df[[column]])) # Convert to lowercase and trim whitespace
+    for (indicator in missing_indicators) {
+      # Counting the non-standard missing values for each indicator
+      count <- sum(column_data == indicator, na.rm = TRUE)
+      if (count > 0) {
+        # Add the results to the data frame
+        non_standard_missing_values_df <- rbind(non_standard_missing_values_df, 
+                                                data.frame(Column = column, Indicator = indicator, Count = count))
+      }
+    }
+  }
+}
+
+# Printing the data frame
+print(non_standard_missing_values_df)
+```
+
+
+## 2.2 Outlier Overview
+
+```{r}
+# Extracting numeric columns for boxplot analysis
+numeric_columns <- sapply(df, is.numeric)
+numeric_df <- df[, numeric_columns]
+
+# Looping through numeric columns to generate boxplots
+par(mfrow=c(3,2)) # Adjust the layout based on the number of plots
+for(column in names(numeric_df)) {
+    boxplot(numeric_df[[column]], main=paste("Boxplot for", column), horizontal=TRUE)
+}
+```
+
+
+-   **age**: The distribution is mostly normal with a few older
+    individuals as outliers, indicating a small proportion significantly
+    older than the average.
+-   **education.num**: Generally, individuals have a baseline level of
+    education, with minimal outliers indicating significantly lower
+    education levels.
+-   **capital.gain**: Most individuals have low or no capital gains, but
+    there are notable outliers with very high capital gains, showing a
+    right-skewed distribution.
+-   **capital.loss**: Similar to capital gains, this variable is
+    right-skewed with most entries at zero and a few high-loss outliers.
+-   **hours.per.week**: Displays outliers at both ends, suggesting
+    variability in working hours, with some working significantly less
+    or more than the typical workweek.
+
+
+
+## 2.3 Identifying and Imputing Missing Data
+
+```{r}
+#Converting "?" Columns and converting to NA 
+
+indexer <- df == " ?"
+is.na(df) = indexer
+
+#Identifying Columns with missing value
+
+any(is.na(df))
+apply(df,2,function(data) any(is.na(data)))
+empty_rows = subset(df, !complete.cases(df))
+str(empty_rows)
+
+#Using Mice Imputation to impute the missing rows
+set.seed(123)
+columns_with_missing_values = colnames(df)[colSums(is.na(df)) > 0]
+df$Workclass = as.factor(df$Workclass)
+df$Occupation = as.factor(df$Occupation)
+df$Native.Country = as.factor(df$Native.Country)
+
+imputed_data = mice(df[columns_with_missing_values], m = 1)
+data_imputed = complete(imputed_data)
+df[columns_with_missing_values] = data_imputed
+
+```
+
+## 2.4 Binning Data(Age)
+
+```{r}
+# Binning Age to make data easier to read and more efficient to process in modelling stage
+
+age_groups = list(Child = c(0,12),Adolescent = c(13,17),Adult = c(18,65),Elderly = c(66,Inf))
+AgesDataset = data.frame(df$Age)
+AgeCategories = character(length(df$Age))
+AgeCategories = data.frame(matrix(ncol = 1,nrow = length(df$Age)))
+
+for (obj in seq_along(df$Age)){
+  for(category in names(age_groups)){
+    age_range = age_groups[[category]]
+    if(AgesDataset$df.Age[obj]>= age_range[1] & AgesDataset$df.Age[obj] <= age_range[2]){
+      AgeCategories[obj,1]= category
+      break
+    }
+  }
+}
+
+names(AgeCategories)[1] = "Age Category"
+df = cbind(df,AgeCategories)
+df = df %>% select(-Age)
+
+#Reogranize the data
+
+column_names = names(df)
+column_order = c("Age Category", column_names[1:13])
+df <- df[, column_order]
+head(df)
+
+colnames(df)[ncol(df)] <- 'income'
+
+# Writing the csv
+write.csv(df,"Proccessed Adult Census.csv", row.names = FALSE)
+```
+
+# 3. Descriptives and Visualizations
+
+## 3.1 Geographical Distribution 
+
+```{r}
+#Set Map Visual
+world_map <- map_data("world")
+country_df <- df %>%
+    select(Native.Country, FNLWGT) %>%
+    rename(Country = Native.Country, Frequency = FNLWGT)
+
+sum_by_country <- country_df %>%
+    group_by(Country) %>%
+    summarise(Frequency= sum(Frequency)/mean(Frequency))
+
+sum_by_country$Country <- trimws(sum_by_country$Country)
+
+merged_data <- left_join(world_map, sum_by_country, by = c("region" = "Country"))
+
+
+ggplot(merged_data) +
+  geom_polygon(aes(x = long, y = lat, group = group, fill = Frequency),
+               color = "white", size = 0.1) +
+  scale_fill_gradient(low = "lightblue", high = "darkblue", name = "Frequency") +
+  theme_minimal()
+```
+
+
+
+
+
+
+
+```{r Data Loading and cleaning, message=FALSE, include=FALSE}
+# Read data
+dat <- read.csv("Proccessed Adult Census.csv")
+#head(dat); dim(dat)
+
+#Numeric variables: FNLWGT, Capital gain, Capital loss, Hours per week
+#Character variables: Age category, Workclass, Education, Marital status, Occupation, Relationship, Race, Sex, Native country, Income
+
+#---------------
+# Data cleaning
+#---------------
+# 1. removing native country and relationship
+adultdata <- dat[, !names(dat) %in% c("Native.Country", "Relationship")]
+#head(adultdata)
+
+# 2. Reduce 7 categories in 'Workclass' column
+adultdata <- adultdata %>%
+  mutate(Workclass = case_when(
+    Workclass %in% c(" State-gov", " Federal-gov", " Local-gov") ~ "Government",
+    Workclass %in% c(" Self-emp-not-inc", " Self-emp-inc") ~ "Self-employed",
+    Workclass %in% c(" Private", " Without-pay") ~ "Private",
+    Workclass %in% c(" Never-worked") ~ "Unemployed"
+))
+
+#unique(adultdata$Workclass)
+#"Government"    "Self-employed" "Private"       "Unemployed"
+
+
+# 3. Reduce 16 categories of education 
+#unique(adultdata$Education)
+adultdata <- adultdata %>%
+  mutate(Education = case_when(
+    Education %in% c(" Bachelors", " Masters", " Doctorate", " Assoc-acdm", " Assoc-voc", " Prof-school") ~ "High",
+    Education %in% c(" HS-grad", " Some-college", " 12th", " 11th") ~ "Moderate",
+    Education %in% c(" 9th", " 7th-8th", " 5th-6th", " 10th", " 1st-4th", " Preschool") ~ "Low"))
+unique(adultdata$Education)
+
+# 4. Reduce the 7 categories of Marital Status
+#unique(adultdata$Marital.Status)
+adultdata <- adultdata %>%
+  mutate(Marital.Status = case_when(
+    Marital.Status %in% c(" Married-civ-spouse", " Married-AF-spouse", " Married-spouse-absent") ~ "Married",
+    Marital.Status %in% c(" Divorced", " Separated", " Widowed") ~ "Divorced",
+    Marital.Status %in% c(" Never-married") ~ "Single"))
+#unique(adultdata$Marital.Status) "Single"   "Married"  "Divorced"
+
+
+# 5. Reduce the categories of occupation
+#unique(adultdata$Occupation)
+adultdata <- adultdata %>%
+  mutate(Occupation = case_when(
+    Occupation %in% c(" Exec-managerial", " Adm-clerical", " Tech-support") ~ "OfficeWork",
+    Occupation %in% c(" Prof-specialty", " Armed-Forces") ~ "Professional",
+    Occupation %in% c(" Craft-repair", " Transport-moving", "Machine-op-inspct", "Protective-serv"," Handlers-cleaners", " Other-service", " Priv-house-serv") ~ "Service",
+    TRUE ~ "Other"
+  ))
+
+#unique(adultdata$Occupation) "OfficeWork"   "Service"      "Professional" "Other"
+
+
+# 6. Reduce the 5 categories of Race
+#unique(adultdata$Race)
+adultdata <- adultdata %>%
+  mutate(Race = case_when(
+    Race %in% c(" White") ~ "White",
+    Race %in% c(" Black") ~ "Black",
+    Race %in% c(" Asian-Pac-Islander", " Amer-Indian-Eskimo", " Other") ~ "Other"))
+#unique(adultdata$Race) "White" "Black" "Other"
+
+# 7. Correcting 2 categories of Sex and Income
+adultdata <- adultdata %>%
+  mutate(Sex = case_when(
+    Sex %in% c(" Male") ~ "Male",
+    Sex %in% c(" Female") ~ "Female"))
+#unique(adultdata$Sex)
+
+adultdata <- adultdata %>%
+  mutate(income = case_when(
+    income %in% c(" <=50K") ~ "<=50K",
+    income %in% c(" >50K") ~ ">50K"))
+#unique(adultdata$income)
+
+```
+
+## 3.2 Summary statistics
+
+In the pursuit of a comprehensive understanding of the dataset, summary
+statistics have been computed for both numeric and categorical
+variables. The numeric variables exhibit diverse ranges and central
+tendencies. "Final weight" spans from 12,285 to 1,484,705 with a mean of
+approximately 189,778. "Capital gain" varies between 0 and 99,999,
+averaging at 1,077.65, but with notable variability denoted by a
+standard deviation of 7,385.29. "Capital loss" ranges from 0 to 4,356,
+with a mean of 87.30 and a standard deviation of 402.96. Additionally,
+"Hours per week" display a range of 1 to 99 hours, with a mean of 40.44
+hours and a moderate standard deviation of 12.35, indicating some
+variability in work hours among the dataset entries.
+
+
+```{r Summary statistics (Numeric), echo=FALSE, message=FALSE, warning=FALSE}
+
+# 8. summary statistics 
+adultdata1 <- adultdata
+names(adultdata1) <- c("Age category", "Working class", "Final weight", "Education", "Marital status", "Occupation", "Race", "Sex", "Capital gain", "Capital loss", "Hours per week", "Income")
+#head(adultdata1)
+
+# Summary Statistics for Numeric variables
+subset_adultdata1 <- adultdata1[, c("Final weight", "Capital gain", "Capital loss", "Hours per week")]
+summary_data <- basicStats(subset_adultdata1)
+t_summ <- as.data.frame(t(round(summary_data,2)))
+t_summ <- t_summ[, c("Minimum", "Maximum", "Mean", "Stdev")]
+names(t_summ) <- c("Min", "Max", "Mean", "St. deviation")
+rownames(t_summ) <-  c("Final weight", "Capital gain", "Capital loss", "Hours per week")
+knitr::kable(t_summ, caption = "Summary statistics of numeric variables", digits = 3)
+
+```
+
+Within the categorical variables, several key insights emerge from the
+summary statistics. In "Age category", the dataset predominantly
+consists of adults, with a frequency of 31,008, followed by the elderly,
+totaling 1,158 instances. The "Working class" variable highlights
+"Private" employment as the top category, prevailing with 24,064
+occurrences, while "Government" positions follow closely at 4,621.
+Moving to "Education", the dataset exhibits a significant presence in
+the "Moderate" education category with 19,400 entries, with "High"
+education as the second most frequent at 10,516 instances. In terms of
+"Marital status", "Married" individuals dominate at 15,417, whereas
+"Single" individuals follow closely at 10,683. Within the "Occupation"
+category, "Service" roles are prevalent with 11,144 occurrences, while
+"OfficeWork" positions come next at 9,316. The "Race" category indicates
+a majority of "White" individuals with 27,816 instances, followed by
+"Black" individuals at 3,124. In "Sex" feature, the dataset
+predominantly comprises "Male" individuals at 21,790, with "Female"
+entries totaling 10,771. Finally, in terms of "Income", the dataset
+reflects a larger representation in the "\<=50K" income category with
+24,720 occurrences compared to "\>50K," which totals 7,841 instances.
+
+```{r Summary statistics (categorical), echo=FALSE, message=FALSE, warning=FALSE}
+
+# Summary Statistics for Categorical Variables
+remaining_adultdata1 <- adultdata1[, !(names(adultdata1) %in% c("Final weight", "Capital gain", "Capital loss", "Hours per week"))]
+
+# Function to get summary information for categorical variables
+get_categorical_summary <- function(var) {
+  var_table <- table(var)
+  var_freq <- sort(var_table, decreasing = TRUE)
+  var_info <- data.frame(
+    `No of categories` = length(var_freq),
+    `Top category` = names(var_freq)[1],
+    `Top category freq` = var_freq[1],
+    `Second category` = names(var_freq)[2],
+    `Second category freq` = var_freq[2]
+  )
+  return(var_info)}
+
+# Apply the function to each categorical variable
+summary_info <- remaining_adultdata1 %>%
+  summarise(across(where(is.character), get_categorical_summary)) %>%
+  pivot_longer(cols = everything(),
+               names_to = "Variable", 
+               values_to = "Value")
+
+summary_chr <- as.matrix(summary_info)
+colnames(summary_chr) <- NULL
+summary_chr <- as.data.frame(data.frame(summary_chr))
+colnames(summary_chr) <- c("Variable", "No. of categories", "Top category", "Freq.", "Second top category", "Freq.")
+
+knitr::kable(summary_chr, caption = "Summary statistics of categorical variables", digits = 3)
+
+#colnames(summary_chr) <- c("Variable", "No. of categories", "Top category", "Top category frequency", "Second category", "Second category frequency")
+
+```
+
+
+## 3.3 Exploratory data analysis
+
+For classfication problem, the exploratory data analysis unveiled
+intriguing insights regarding the association between numeric features
+and income categories ("\<=50K" and "\>50K"). Notably, the density plot
+revealed that "Final weight" doesn't showcase any influence on income
+categories. As the density remains consistent across both income
+categories, this feature won't be considered further in the analysis.
+However, the analysis depicted distinct variations in "Capital gain",
+"Capital loss", and "Hours per week" concerning different income
+categories. These variables display notable associations with target
+variable income, thus warranting their significance in the subsequent
+analysis. Their varying densities across income categories signify their
+potential significance in predicting income levels, making them pivotal
+for further exploration in this classification problem.
+
+
+### 3.3.1 Univariate Analysis 
+
+```{r C-EDA for numeric variable (1), echo=FALSE, fig.align='center', fig.cap="(a) Density plot of numeric features w.r.t to Income categories", message=FALSE, warning=FALSE, out.width='55%'}
+#------------------------------
+# Exploratory data analysis
+#------------------------------
+edata <- adultdata1
+edata1 <- edata[,c("Income","Final weight", "Capital gain", "Capital loss", "Hours per week")]
+# 1. Association between continuous inputs and income
+
+# define theme for figures
+figtheme <- theme(axis.text.x= element_text(colour = 'black', size = 12),
+      axis.text.y= element_text(colour = 'black', size = 12),
+      plot.title= element_text(color="black", size = 12, face="bold", hjust = 0.5),
+      #plot.margin= unit(c(0.4,0.4,0.4,0.4), 'lines'),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor= element_blank(),
+      plot.background = element_rect(colour = 'grey40'),
+      axis.title = element_text(size = 12, colour = 'black', face= 'bold'),
+      #legend.key.height= unit(1.5,'cm'),
+      #legend.text = element_text(size = 5, face = 'bold', margin = margin(0, 0, -1, -1)),
+      axis.ticks.y.left = element_line(size = 1),
+      axis.ticks.x.bottom = element_line(size=1),
+      panel.background= element_rect(colour="black", size = 1),
+      legend.position = "bottom",
+      legend.background = element_rect(fill = "transparent"),
+      legend.text = element_text(color= 'black', size= 12),
+      legend.title = element_text(color= 'black', size= 12, face ="bold"))
+
+d1 <- ggplot(edata1, aes(x = `Final weight`, 
+                 fill = as.factor(Income))) +
+  geom_density(alpha = 0.4) + labs(x = "Final weight", y= "Density", fill= "Income")+
+  theme_light()+ figtheme
+
+d2 <- ggplot(edata1, aes(x = `Capital gain`, fill = as.factor(Income))) +
+  geom_density(alpha = 0.4) + labs(x = "Capital gain", y= "Density", fill= "Income")+
+  theme_light()+ figtheme
+
+d3 <- ggplot(edata1, aes(x = `Capital loss`, fill = as.factor(Income))) +
+  geom_density(alpha = 0.4) + labs(x = "Capital loss", y= "Density", fill= "Income")+
+  theme_light()+ figtheme
+
+d4 <- ggplot(edata1, aes(x = `Hours per week`, fill = as.factor(Income))) +
+  geom_density(alpha = 0.4) + labs(x = "Hours per week", y= "Density", fill= "Income")+
+  theme_light()+ figtheme
+
+dsub <- ggarrange(d1, d2, d3, d4, nrow=2, col=2 ,legend= "bottom", common.legend = TRUE)
+dsub$`1`
+```
+
+```{r}
+# Univariate Analysis
+
+subset_data <- df[, c("Capital.Gain", "Capital.Loss", "Hours.Per.Week")]
+data_long <- gather(subset_data)
+
+# Plot histograms using ggplot2
+
+ggplot(data_long, aes(x = value, fill = key)) +
+  geom_histogram(binwidth = 1, position = "dodge", color = "black", size = 1.0) +  # Adjust the size parameter
+  facet_wrap(~ key, scales = "free") +
+  labs(title = "Histograms of Integer Columns") +
+  theme_minimal()+
+  theme(
+    plot.background = element_rect(fill = "white"), 
+    plot.margin = unit(rep(1, 4), "cm") 
+  )
+
+```
+
+
+```{r C-EDA for numeric variable (2), echo=FALSE, fig.align='center', fig.cap="(b) Density plot of numeric features w.r.t to income categories", message=FALSE, warning=FALSE, out.width='55%'}
+dsub$`2`
+
+```
+
+The exploratory data analysis using mosaic plots highlighted key
+insights into the relationship (association) between categorical
+features and income categories. Notably, the "Age category" exhibited
+minimal or no variation among income categories, indicating a lack of
+association or a weak one at best. Consequently, this feature will be
+excluded from further analysis due to its limited discriminatory power
+regarding income levels. Conversely, other categorical features
+showcased significant variations in their categories across different
+income groups, suggesting a strong impact of income changes on these
+features. Therefore, excluding "Age category", the remaining categorical
+features will be retained for the subsequent feature selection stage due
+to their apparent influence on distinguishing income categories. These
+categorical variables are further undergone one-hot encoding to treat
+each category of each feature as a separate dummy variable.
+
+## 3.3.2 Bivariate Analysis
+
+```{r C-EDA for categorical variable, echo=FALSE, fig.align='center', fig.cap="(b) Mosaic plot to observe the association between categorical features and Income categories", message=FALSE, warning=FALSE, out.width='80%'}
+
+col.m <- c("deeppink3", "darkslategray")
+
+# Mosaic plots 
+par(mfrow = c(3, 3), mar = c(3, 3, 2, 1), oma = c(1, 1, 0, 0), font=2, cex=0.7)
+mosaicplot(Income~ `Age category`, data=edata, 
+           color = col.m, main = "(a) Income vs. Age category",
+           xlab = "Income", ylab = "Age category",
+           cex.axis = 1, border = "black", las = 1) 
+
+mosaicplot(Income~ `Working class`, data=edata, 
+           color = col.m, main = "(b) Income vs. Working class",
+           xlab = "Income", ylab = "Working class",
+           cex.axis = 1, border = "black", las = 1) 
+
+mosaicplot(Income~ Education, data=edata, 
+           color = col.m, main = "(c) Income vs. Education",
+           xlab = "Income", ylab = "Education",
+           cex.axis = 1, border = "black", las = 1) 
+
+mosaicplot(Income~ `Marital status`, data=edata, 
+           color = col.m, main = "(d) Income vs. Marital status",
+           xlab = "Income", ylab = "Marital status",
+           cex.axis = 1, border = "black", las = 1) 
+
+mosaicplot(Income~ `Occupation`, data=edata, 
+           color = col.m, main = "(e) Income vs. Occupation",
+           xlab = "Income", ylab = "Occupation",
+           cex.axis = 1, border = "black", las = 1) 
+
+mosaicplot(Income~ `Race`, data=edata, 
+           color = col.m, main = "(f) Income vs. Race",
+           xlab = "Income", ylab = "Race",
+           cex.axis = 1, border = "black", las = 1) 
+
+mosaicplot(Income~ `Sex`, data=edata, 
+           color = col.m, main = "(g) Income vs. Sex",
+           xlab = "Income", ylab = "Sex",
+           cex.axis = 1, border = "black", las = 1) 
+
+```
+
+
+
+```{r}
+# Bivariate Analysis
+
+# Correlation Analysis (Numeric/Numeric)
+numeric_data <- df[, sapply(df, is.numeric)]
+
+# Calculate the correlation matrix for numeric variables
+cor_matrix_numeric <- cor(numeric_data)
+
+# Print the correlation matrix
+print(cor_matrix_numeric)
+
+corrplot(
+  cor_matrix_numeric,
+  method = "color",
+  type = "upper", # Use "full" for the full matrix
+  tl.col = "black", # Text label color
+  tl.srt = 45, # Text label rotation angle
+  addCoef.col = NA # Do not display coefficients
+)
+
+
+# Correlation Analysis (Categorica/Categorical) 
+
+char_columns <- sapply(df, is.character)
+df[char_columns] <- lapply(df[char_columns], as.factor)
+
+categorical_data <- df[, sapply(df, is.factor)]
+
+#Encode the categorical data
+encoded_data <- categorical_data %>%
+  mutate_all(~ as.integer(factor(.)))
+
+cor_matrix_all <- cor(encoded_data)
+
+print(cor_matrix_all)
+corrplot(
+  cor_matrix_all,
+  method = "color",
+  type = "upper", # Use "full" for the full matrix
+  tl.col = "black", # Text label color
+  tl.srt = 45, # Text label rotation angle
+  addCoef.col = NA # Do not display coefficients
+)
+
+
+
+# Correlation of (Categorical/Numerical)
+
+Combined_CA <- cbind(encoded_data,numeric_data)
+cor_matrix_combined <- cor(Combined_CA)
+heatmap(cor_matrix_combined, 
+        main = "Correlation Heatmap", 
+        col = colorRampPalette(c("blue", "white", "red"))(100),
+        margins = c(5, 5))
+```
+
+```{r One Hot Encoding, include=FALSE, warning=FALSE}
+#---------------------------------
+# Encoding of categorical variable
+#---------------------------------
+fdata <- edata[, !names(edata) %in% c("Final weight", "Age category")]
+#head(fdata)
+encode_var <- fdata[, !names(fdata) %in% c("Income","Final weight", "Capital gain", "Capital loss", "Hours per week")]
+#head(encode_var)
+nominal_variables <- names(encode_var)
+# 1. making the variables of factor nature
+encode_var$`Working class` <- factor(encode_var$`Working class`,
+                                     levels = c("Government", "Self-employed", "Private", "Unemployed"), 
+                                     labels = c(1,2,3,4))
+encode_var$Education <- factor(encode_var$Education,
+                                     levels = c("High", "Moderate", "Low"), 
+                                     labels = c(1,2,3))
+encode_var$`Marital status` <- factor(encode_var$`Marital status`,
+                               levels = c("Single","Married","Divorced"), 
+                               labels = c(1,2,3))
+encode_var$Occupation <- factor(encode_var$Occupation,
+                                      levels = c("OfficeWork", "Service", "Professional", "Other"), 
+                                      labels = c(1,2,3,4))
+encode_var$Race <- factor(encode_var$Race,
+                                levels = c("White", "Black", "Other"), 
+                                labels = c(1,2,3))
+#unique(encode_var$Sex)
+encode_var$Sex <- factor(encode_var$Sex,
+                          levels = c("Male", "Female"), 
+                          labels = c(1,2))
+
+subset_edata <- encode_var
+
+# 2. Apply one-hot encoding using dummyVars()
+encod <- dummyVars(~., data = subset_edata, 
+                   fullRank = F)
+
+# Now transform with the one-hot encoding
+encodeddata <- as.data.frame(predict(encod, newdata = subset_edata))
+gh1 = cbind(encodeddata,
+                 fdata[, !(names(fdata) %in% nominal_variables)])
+#head(gh1)
+#names(gh1)
+
+```
+
+## 3.4. Feature selection
+
+A feature selection process has been carried out with the help of Lasso
+regression to determine the significant features to be included in the
+final model. The feature selection process employing Lasso regression
+has effectively identified a subset of significant variables impacting
+income while reducing the dataset's dimensionality. From the
+coefficients graph presented, specific variables have emerged as
+influential factors for predicting income levels. Notably, features such
+as "EducationHigh", "EducationLow", "MaritalStatusMarried",
+"OccupationOffice", "OccupationProfessional", "RaceWhite", "Sex",
+"CapitalGain", "CapitalLoss", and "HoursPerWeek" have been discerned as
+the final set of features crucial for subsequent classification
+modeling. These features exhibit considerable coefficients, signifying
+their substantial impact on determining income categories and warranting
+their utilization in the subsequent modeling phase.
+
+```{r C-Feature selection (1), echo=FALSE, fig.align='center', fig.cap="(b) Lasso coefficients showing impact on Income", message=FALSE, warning=FALSE, out.width='70%'}
+#------------------------
+# Feature Selection
+#------------------------
+feature_data <- gh1 #dim(feature_data) #32561x23
+set.seed(123)
+
+x <- as.matrix(feature_data[,-which(names(feature_data) %in% "Income")])
+y <- matrix(feature_data$Income)
+
+# Lasso Regression
+# best lambda using cross-validation
+cv.lasso <- cv.glmnet(x, y, alpha = 1, family = "binomial")
+
+# Fit the final model 
+lasso.model <- glmnet(x, y, alpha = 1, family = "binomial",
+                      lambda = cv.lasso$lambda.1se)
+
+# regression coefficients from lasso
+lasso.coef <- coef(lasso.model)
+
+# Convert the sparse matrix of coefficients to a data frame
+lasso_df <- as.data.frame(as.matrix(lasso.coef))
+lasso_coeff <- lasso_df[-1,]
+lasso_coeff <- round(as.numeric(format(lasso_coeff, scientific = FALSE)),3)
+coeff_names <- c("WorkingClassGov", "WorkingClassSelfEmp", "WorkingClassPriv", "WorkingClassUnemp", 
+                        "EducationHigh", "EducationMod","EducationLow", "MaritalStatusSing", "MaritalStatusMarried", "MaritalStatusDiv",
+                        "OccupationOffice", "OccupationServ", "OccupationProfessional", "OccupationOther", 
+                        "RaceWhite", "RaceBlack", "RaceOther", "SexMale", "SexFemale", "CapitalGain", "CapitalLoss", "HoursPerWeek")
+lasso_df <- data.frame(coeff_names, lasso_coeff)
+
+# Plotting Lasso coefficients with line and point plot
+ggplot(lasso_df, aes(x = reorder(coeff_names, lasso_coeff), y = lasso_coeff)) +
+  geom_line(color = "blue", size = 1, alpha = 0.8, group = 1) +
+  geom_point(color = "red", size = 3) +
+  geom_text(aes(label = round(lasso_coeff, 2)), hjust = 1, vjust = -0.5, size = 3, color = "black") +
+  theme_light() + figtheme+
+  labs(x = "Features", y = "Coefficient") +
+  coord_flip()
+
+```
+
+```{r C-Feature selection (2), message=FALSE, warning=FALSE, include=FALSE}
+selectedvar <- c("Education.1", "Education.3", "`Marital status`2", 
+                 "Occupation.1", "Occupation.3", "Race.1", "Sex.1", 
+                 "Capital gain", "Capital loss", "Hours per week")
+
+selected_var <- feature_data[, selectedvar]
+final_dat <- data.frame(Income = feature_data$Income,
+                        selected_var)  #dim(final_dat) #32561 11 
+names(final_dat) <- c("Income", "EducationHigh", "EducationLow", "MaritalStatusMarried", "OccupationOffice",
+                      "OccupationProfessional", "RaceWhite" ,"Sex", "CapitalGain", "CapitalLoss", "HoursPerWeek")
+
+```
+
+\pagebreak
+
+# 4. Data Analysis
+
+## 4.1. Data Splitting
+
+The dataset was partitioned into two distinct subsets, namely a training
+set and a testing set. The former was utilized for constructing the
+predictive model, whereas the latter was employed to evaluate its
+generalization performance. Specifically, data has been partitioned into
+the training and testing sets with 70 and 30% distribution.
+
+```{r C-Data splitting, message=FALSE, warning=FALSE, include=FALSE}
+#--------------------
+# Split data
+#--------------------
+HR <- final_dat
+
+HR$Income <- as.factor(HR$Income)
+levels(HR$Income) <- c("LessThan50", "MoreThan50")
+#head(HR)
+set.seed(123)
+
+dataSplit <- initial_split(HR, prop = 0.7, strata = Income)
+train_data <- training(dataSplit)
+test_data  <- testing(dataSplit)
+
+# defining parameters for cross-validation
+CV_folds <- 10 # no. of folds
+CV_repeats <- 3 # no. of repeats
+
+train_control <- trainControl(method = "repeatedcv",
+                              number = CV_folds, 
+                              repeats = CV_repeats, 
+                              verboseIter = FALSE,
+                              sampling = "smote",
+                              summaryFunction=twoClassSummary,	# Use AUC to pick the best model
+                              classProbs=TRUE)
+
+# matrix of predictors
+trainX <- train_data[,-1]
+testX <- test_data[,-1]
+
+```
+
+## 4.2. Logistic model fitting
+
+From the Logistic Regression model, several key statistics and metrics
+stand out. The model achieved an accuracy of 80.2%, surpassing the "No
+Information Rate (NIR)" of 75.91%, indicating a performance
+significantly better than chance. The Kappa value of 0.5247 implies a
+moderate level of agreement beyond chance. Breaking down the confusion
+matrix obtained from the logit model, it can be observed that -
+Sensitivity (True Positive Rate): 80.5% -Specificity (True Negative
+Rate): 79.26% - Positive Predictive Value: 92.44% - Negative Predictive
+Value: 56.33%
+
+The model's prevalence, indicating the proportion of positive cases in
+the dataset, stands at 75.91%. Notably, the model showcases a balanced
+accuracy of 79.88%, signifying its performance in handling imbalanced
+classes. The F1 score, a measure combining precision and recall, is
+calculated at 0.6585, indicating a reasonable balance between precision
+and recall.Moreover, the Receiver Operating Characteristic (ROC)
+analysis displays an Area Under the Curve (AUC) of 0.8854, suggesting a
+strong performance in distinguishing between income categories.
+
+```{r C-Logit regression (1), fig.align='center', fig.cap="ROC curve of Logit model", message=FALSE, warning=FALSE, include=FALSE, out.width='50%'}
+#_______________________
+# 1) Logistic regression 
+#_______________________
+set.seed(123)
+
+logit_model_time <- system.time({
+logit_model = train(
+  form = Income ~ .,
+  data = train_data,
+  trControl = train_control,
+  method = "glm",
+  family = "binomial",
+  metric= 'ROC')
+})
+
+sum_logit <- summary(logit_model)
+
+# Make predictions
+pred_class_logit <-predict(logit_model, 
+                           new=test_data, 
+                           type = "prob")
+prob_Imore50_logit <- pred_class_logit$MoreThan50
+
+# Compute the ROC curve
+roc_logit <- roc(as.numeric(test_data$Income == "MoreThan50"),
+                 prob_Imore50_logit)
+
+# Calculate the optimal cutoff point
+Optcutoff_logit <- coords(roc_logit, "best", seed=123)["threshold"]
+
+# Convert prob_AttrYes_logit to a simple numeric vector
+prob_Imore50_logit <- as.numeric(unname(prob_Imore50_logit))
+
+# Extract optimal_cutoff as a single numeric value, not a dataframe
+Optcutoff_logit <- as.numeric(unname(Optcutoff_logit))
+
+pred.class.logit <- ifelse(prob_Imore50_logit > Optcutoff_logit, "MoreThan50", "LessThan50")
+
+# Calculate confusion matrix
+conf_mat_logit <- confusionMatrix(as.factor(pred.class.logit), as.factor(test_data$Income))
+
+# Calculate precision, recall and F1 score
+precision_logit <- conf_mat_logit$table[2,2] / sum(conf_mat_logit$table[2,])
+recall_logit <- conf_mat_logit$table[2,2] / sum(conf_mat_logit$table[,2])
+
+# Calculate F1 Score
+f1score_logit <- 2 * ((precision_logit*recall_logit) / (precision_logit+recall_logit))
+
+# Create a ROC curve
+roc_logit <- roc(test_data$Income, prob_Imore50_logit)
+
+# Plot the ROC curve
+plot(roc_logit, print.auc=TRUE, main="ROC Curve")
+
+```
+
+```{r C-Logit Model (2), echo=FALSE, fig.align='center', fig.cap="AUC curve of logit model", message=FALSE, warning=FALSE, out.width='50%'}
+
+# Calculate the Area Under the Curve (AUC)
+auc_logit <- round(auc(roc_logit),3)
+
+# create ROC plot
+ggroc(roc_logit, colour = 'steelblue', size = 2) +
+  ggtitle("AUC of logit model") + 
+  geom_abline(intercept = 1, slope = 1,
+              color = "black",linetype = "dashed") +
+  scale_color_manual(values=c("steelblue","lightblue"))+
+  geom_polygon(aes(x=roc_logit$specificities, y=roc_logit$sensitivities),fill="lightblue")+
+  geom_text(aes(label = paste0("AUC = ", auc_logit),x=0.75,y=0.5), size = 7)+
+  theme_light()+theme(plot.title = element_text(hjust=0.5))+ figtheme
+```
+
+Overall, the logistic regression model demonstrates promising
+performance in predicting income categories, achieving notable accuracy
+and exhibiting a reasonably good balance between sensitivity and
+specificity, as reflected in the AUC.
+
+```{r C-Logit model (3), echo=FALSE, fig.align='center', fig.cap="Confusion matrix of Logit model", message=FALSE, warning=FALSE, out.width='70%'}
+# confusion matrix of logit model
+# extract the confusion matrix values as data.frame
+cm_d1 <- as.data.frame(conf_mat_logit$table)
+# confusion matrix statistics as data.frame
+cm_st1 <-data.frame(conf_mat_logit$overall)
+# round the values
+cm_st1$conf_mat_logit.overall <- round(cm_st1$conf_mat_logit.overall,3)
+names(cm_st1) <- "Statistic"
+
+# Rounded percentage values
+cm_p1 <- as.data.frame(prop.table(conf_mat_logit$table))
+cm_d1$Perc <- round(cm_p1$Freq*100,1)
+
+# plotting the matrix
+cm_d_p1 <-  ggplot(data = cm_d1, aes(x = Reference , y =  Prediction, fill = Freq))+
+  geom_tile() +
+  geom_text(aes(label =  paste("",Freq,",",Perc,"%")), color = 'yellow', size = 4) +
+  theme_light() + figtheme+
+  guides(fill=FALSE) 
+
+# plotting the stats
+library(gridExtra)
+library(grid)
+cm_st_p1 <-  tableGrob(cm_st1)
+
+# all together
+grid.arrange(cm_d_p1, cm_st_p1,nrow = 1, ncol = 2, 
+                   top=textGrob("Confusion matrix and statistics",                                gp=gpar(fontsize=15,font=1)))
+```
+
+## 4.3. Artificial Neural network
+
+The Artificial Neural Network (ANN) model presents a different
+performance profile compared to the logistic regression model. The
+accuracy of the ANN model stands at 82.09%, indicating a slightly
+improved performance over the logistic regression model. It notably
+surpasses the "No Information Rate (NIR)" of 75.91%, suggesting better
+predictive capabilities than random chance. However, certain metrics
+show trade-offs within the ANN model as presented below, - Sensitivity
+(True Positive Rate): 96.66% - Specificity (True Negative Rate):
+36.17% - Positive Predictive Value: 82.68% - Negative Predictive Value:
+77.43%
+
+The prevalence of the model remains consistent at 75.91%, similar to the
+logistic regression model. The Detection rate is at 73.37%, indicating
+the model's effectiveness in identifying positive cases. However, the
+model's specificity is relatively lower compared to sensitivity,
+indicating a higher false positive rate. This discrepancy is further
+highlighted by the lower AUC of 0.6651 in the ROC analysis, suggesting a
+weaker performance in distinguishing between income categories compared
+to the logistic regression model's ROC AUC of 0.8854.
+
+```{r C-ANN (1), fig.align='center', fig.cap="ROC curve of ANN", message=FALSE, warning=FALSE, include=FALSE, out.width='50%'}
+#________________________
+# 2. ANN
+#_______________________
+
+# Define the tuning grid
+tuneGrid <- expand.grid(size = 1, decay = 0)
+
+ann_model_time <- system.time({
+  # Fit the optimal nnet model with best parameter values
+  nn_model <- train(Income ~ .,
+                    data = HR,
+                    method = "nnet",
+                    metric = "ROC",
+                    trControl = train_control,
+                    trace= F,
+                    tuneGrid = tuneGrid)})
+
+# Make predictions from nn model
+pred_class_svm <-predict(nn_model, 
+                         new=test_data, 
+                         type = "prob")
+prob_Imore50_svm <- pred_class_svm$MoreThan50
+
+#pred_logit <- prediction(prob_AttrYes_logit,
+#                         test_data$Attrition)
+
+# Compute the ROC curve
+roc_svm <- roc(as.numeric(test_data$Income == "MoreThan50"),
+               prob_Imore50_svm)
+
+# Calculate the optimal cutoff point
+Optcutoff_svm <- coords(roc_svm, "best", seed=123)["threshold"]
+
+# Convert prob_AttrYes_logit to a simple numeric vector
+prob_Imore50_svm <- as.numeric(unname(prob_Imore50_svm))
+
+# Extract optimal_cutoff as a single numeric value, not a dataframe
+Optcutoff_svm <- as.numeric(unname(Optcutoff_svm))
+
+pred.class.svm <- ifelse(prob_Imore50_svm > Optcutoff_svm, "MoreThan50", "LessThan50")
+
+# Calculate confusion matrix
+conf_mat_svm <- confusionMatrix(as.factor(pred.class.svm), as.factor(test_data$Income))
+
+# Calculate precision, recall and F1 score
+precision_svm <- conf_mat_svm$table[2,2] / sum(conf_mat_svm$table[2,])
+recall_svm <- conf_mat_svm$table[2,2] / sum(conf_mat_svm$table[,2])
+
+# Calculate F1 Score
+f1score_svm <- 2 * ((precision_svm*recall_svm) / (precision_svm+recall_svm))
+
+# Create a ROC curve
+roc_svm <- roc(test_data$Income, prob_Imore50_svm)
+
+# Plot the ROC curve
+plot(roc_svm, print.auc=TRUE, main="ROC Curve")
+```
+
+```{r C-ANN Model (2), echo=FALSE, fig.align='center', fig.cap="AUC curve of ANN", message=FALSE, warning=FALSE, out.width='50%'}
+
+# Calculate the Area Under the Curve (AUC)
+auc_svm <- round(auc(roc_svm),3)
+
+# create ROC plot
+ggroc(roc_svm, colour = 'steelblue', size = 2) +
+  ggtitle("ROC of artificial neural network") +
+  geom_abline(intercept = 1, slope = 1,
+              color = "black",linetype = "dashed") +
+  scale_color_manual(values=c("steelblue","lightblue"))+
+  geom_polygon(aes(x=roc_svm$specificities, y=roc_svm$sensitivities),fill="lightblue")+
+  geom_text(aes(label = paste0("AUC = ", auc_svm),x=0.75,y=0.5), size = 7)+
+  theme_light()+ 
+  theme(plot.title = element_text(hjust=0.5))+figtheme
+
+
+```
+
+Furthermore, the F1 score for the ANN model is calculated at 0.493,
+indicating a trade-off between precision and recall, with a slightly
+lower balance between these metrics compared to the logistic regression
+model. In summary, while the ANN model exhibits higher accuracy, it
+displays a notable imbalance between sensitivity and specificity,
+resulting in a lower AUC and F1 score compared to the logistic
+regression model.
+
+```{r C-ANN (3), echo=FALSE, fig.align='center', fig.cap="Confusion matrix of ANN", message=FALSE, warning=FALSE, out.width='70%'}
+
+# extract the confusion matrix values as data.frame
+cm_d2 <- as.data.frame(conf_mat_svm$table)
+# confusion matrix statistics as data.frame
+cm_st2 <-data.frame(conf_mat_svm$overall)
+# round the values
+cm_st2$conf_mat_svm.overall <- round(cm_st2$conf_mat_svm.overall,3)
+names(cm_st2) <- "Statistic"
+
+# Rounded percentage values
+cm_p2 <- as.data.frame(prop.table(conf_mat_svm$table))
+cm_d2$Perc <- round(cm_p2$Freq*100,1)
+
+# plotting the matrix
+cm_d_p2 <-  ggplot(data = cm_d2, aes(x = Reference , y =  Prediction, fill = Freq))+
+  geom_tile() +
+  geom_text(aes(label =  paste("",Freq,",",Perc,"%")), color = 'yellow', size = 4) +
+  theme_light() + figtheme+
+  guides(fill=FALSE) 
+
+cm_st_p2 <-  tableGrob(cm_st2)
+
+# all together
+grid.arrange(cm_d_p2, cm_st_p2,nrow = 1, ncol = 2, 
+                   top=textGrob("Confusion Matrix and Statistics",gp=gpar(fontsize=15,font=1)))
+
+```
+
+## 4.4. XG boosting
+
+The XGBoost model demonstrates a distinct performance profile compared
+to both the logistic regression and ANN models. It achieves an accuracy
+of 76.63%, slightly below the logistic Regression and ANN models but
+still surpassing the "No Information Rate" (NIR) of 75.91%. Key results
+of the XGBoost model can be briefly explained as, - Sensitivity (True
+Positive Rate): 72.13% - Specificity (True Negative Rate): 90.82% -
+Positive Predictive Value: 96.12% - Negative PredictiveValue: 50.83%
+
+The prevalence remains consistent at 75.91%, akin to the other models,
+while the detection rate stands at 54.75%, indicating its capability to
+identify positive cases. The model exhibits a higher specificity
+compared to sensitivity, showcasing a lower false positive rate. This is
+further reflected in the Balanced accuracy of 81.47%, indicating a
+balanced performance in classifying both positive and negative cases.
+Additionally, the XGBoost model demonstrates a higher F1 score of 0.652
+compared to the ANN model,indicating a better balance between precision
+and recall and outperforming both Logistic Regression and ANN models.
+
+```{r C-XG Boosting (1), fig.align='center', fig.cap="ROC curve of XG Boosting", message=FALSE, warning=FALSE, include=FALSE, out.width='50%'}
+
+#_______________________
+# 3) XG BOOST
+#_______________________
+
+# Set the best parameters
+best_params <- expand.grid(
+  nrounds = 100,
+  max_depth = 2,
+  eta = 0.3,
+  gamma = 0.2,
+  colsample_bytree = 0.5,
+  min_child_weight = 3,
+  subsample = 1
+)
+
+# Fit the xgboost model with the best parameters
+xgboost_model_time <- system.time({
+xgb_model <- train(
+  x = trainX,
+  y = train_data$Income,
+  method = "xgbTree",
+  metric = "ROC",
+  trControl = train_control,
+  tuneGrid = best_params)
+})
+
+# Make predictions
+pred_class_xgb <-predict(xgb_model, 
+                         new=test_data, 
+                         type = "prob")
+prob_Imore50_xgb <- pred_class_xgb$MoreThan50
+
+# Compute the ROC curve
+roc_xgb <- roc(as.numeric(test_data$Income == "MoreThan50"),
+               prob_Imore50_xgb)
+
+# Calculate the optimal cutoff point
+Optcutoff_xgb <- coords(roc_xgb, "best", seed=123)["threshold"]
+
+# Convert prob_AttrYes_logit to a simple numeric vector
+prob_Imore50_xgb <- as.numeric(unname(prob_Imore50_xgb))
+
+# Extract optimal_cutoff as a single numeric value, not a dataframe
+Optcutoff_xgb <- as.numeric(unname(Optcutoff_xgb))
+
+pred.class.xgb <- ifelse(prob_Imore50_xgb > Optcutoff_xgb, "MoreThan50", "LessThan50")
+
+# Calculate confusion matrix
+conf_mat_xgb <- confusionMatrix(as.factor(pred.class.xgb), as.factor(test_data$Income))
+
+# Calculate precision, recall and F1 score
+precision_xgb <- conf_mat_xgb$table[2,2] / sum(conf_mat_xgb$table[2,])
+recall_xgb <- conf_mat_xgb$table[2,2] / sum(conf_mat_xgb$table[,2])
+
+# Calculate F1 Score
+f1score_xgb <- 2 * ((precision_xgb*recall_xgb) / (precision_xgb+recall_xgb))
+
+# Create a ROC curve
+roc_xgb <- roc(test_data$Income, prob_Imore50_xgb)
+
+# Plot the ROC curve
+plot(roc_xgb, print.auc=TRUE, main="ROC Curve of XG Boost")
+
+```
+
+```{r C-XG Boosting (2), echo=FALSE, fig.align='center', fig.cap="AUC curve of XG Boosting", message=FALSE, warning=FALSE, out.width='50%'}
+
+# Calculate the Area Under the Curve (AUC)
+auc_xg <- round(auc(roc_xgb),3)
+
+# create ROC plot
+ggroc(roc_xgb, colour = 'steelblue', size = 2) +
+  ggtitle("ROC of gradient boosting") + 
+  geom_abline(intercept = 1, slope = 1,
+              color = "black",linetype = "dashed") +
+  scale_color_manual(values=c("steelblue","lightblue"))+
+  geom_polygon(aes(x=roc_xgb$specificities, y=roc_xgb$sensitivities),fill="lightblue")+
+  geom_text(aes(label = paste0("AUC = ", auc_xg),x=0.75,y=0.5), size = 7)+
+  theme_light()+
+  theme(plot.title = element_text(hjust=0.5))+
+  figtheme
+
+```
+
+Overall, the XGBoost model shows a balanced performance with relatively
+higher specificity, effectively capturing true negative cases. Its
+higher F1 score suggests a better balance between precision and recall
+compared to the ANN model, making it a promising model for predicting
+income categories.
+
+```{r C-XG Boosting (3), echo=FALSE, fig.align='center', fig.cap="Confusion matrix of XG Boost", message=FALSE, warning=FALSE, out.width='70%'}
+# extract the confusion matrix values as data.frame
+cm_d5 <- as.data.frame(conf_mat_xgb$table)
+# confusion matrix statistics as data.frame
+cm_st5 <-data.frame(conf_mat_xgb$overall)
+# round the values
+cm_st5$conf_mat_xgb.overall <- round(cm_st5$conf_mat_xgb.overall,3)
+names(cm_st5) <- "Statistic"
+
+# Rounded percentage values
+cm_p5 <- as.data.frame(prop.table(conf_mat_xgb$table))
+cm_d5$Perc <- round(cm_p5$Freq*100,1)
+
+# plotting the matrix
+cm_d_p5 <-  ggplot(data = cm_d5, aes(x = Reference , y =  Prediction, fill = Freq))+
+  geom_tile() +
+  geom_text(aes(label =  paste("",Freq,",",Perc,"%")), color = 'yellow', size = 4) +
+  theme_light() + figtheme+
+  guides(fill=FALSE) 
+
+cm_st_p5 <-  tableGrob(cm_st5)
+
+# all together
+grid.arrange(cm_d_p5, cm_st_p5,nrow = 1, ncol = 2, 
+                   top=textGrob("Confusion Matrix and Statistics", gp=gpar(fontsize=15,font=1)))
+
+```
+
+## 4.5. Feature importance from best fitted model
+
+From the previous discussion of models, XG boost can be conclued as the
+best model. The feature importance analysis from the XGBoost model
+reveals the relative significance of the input features in predicting
+income categories. The importance scores are presented as a percentage,
+indicating the contribution of each feature to the model's overall
+predictive capability. For "MaritalStatusMarried",it stands out as the
+most influential predictor in the model, indicating that marital status,
+specifically being married, holds the highest importance in predicting
+income categories. Following marital status, capital gain emerges as a
+significant contributor, albeit notably less influential than marital
+status, affecting income predictions to a substantial extent. High
+education levels contribute significantly, followed by lower education
+levels, showcasing their importance in predicting income. The number of
+hours worked per week also holds substantial importance in predicting
+income categories. Both gender and capital loss contribute moderately to
+the model's predictive power.The OccupationOffice and
+OccupationProfessional, these occupation categories, though less
+influential compared to other features, still hold relevance in
+predicting income. Interestingly, in this analysis, the White race
+category doesn't contribute significantly to predicting income,
+suggesting it might have less discriminatory power in this specific
+model.
+
+```{r Feature importance chart, echo=FALSE, fig.align='center', fig.cap="Feature importance chart from XG Boost", message=FALSE, warning=FALSE, out.width='60%'}
+
+#-----------------------------------
+# Get variable importance
+#------------------------------------
+
+# Get variable importance
+svm_varimp <- varImp(xgb_model)
+
+
+# Variable importance data
+var_names <- rownames(svm_varimp$importance)
+importance <- svm_varimp$importance$Overall
+
+# Create a data frame
+var_imp_df <- data.frame(variable = var_names, importance = importance)
+
+# Sort the data frame by importance for a better visualization
+var_imp_df <- var_imp_df[order(var_imp_df$importance, decreasing = F), ]
+var_imp_df$variable <- factor(var_imp_df$variable, levels = var_names)
+
+# Create the bar chart using ggplot
+ggplot(var_imp_df, aes(x = as.factor(variable), y = importance)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  geom_text(aes(label = round(importance, 2)), hjust = 0, size = 3) +
+  labs(title = "Features importance graph from XG boost model",
+       x = "Feature", y = "Importance") + coord_flip()+ theme_light()+figtheme
+
+
+```
+
+The time taken by each model to run is also crucial factor in model
+selection and practical implementation. For the logistic regression
+(Logit) model, it took approximately 31.61 seconds to run, making it the
+fastest among the three models evaluated. The ANN model had the longest
+computational time, requiring around 139.96 seconds to complete its
+execution. It took significantly longer compared to the other models,
+potentially due to its complex architecture and training process. The
+XGBoost model, while taking more time than the logistic regression
+model, was relatively faster than the ANN. It ran in approximately 47.50
+seconds, showing a balance between speed and complexity.
+
+```{r C-Run Time, echo=FALSE, message=FALSE, warning=FALSE}
+#-------------------------
+# Running Time for each model
+#------------------------
+# Creating a data frame with model names and their respective times
+model_names <- c("Logit Model", "ANN Model", "XGBoost Model")
+elapsed_times <- c(logit_model_time["elapsed"], ann_model_time["elapsed"], xgboost_model_time["elapsed"])
+
+time_data <- data.frame(ClassificationModels = model_names,  Time = elapsed_times)
+
+knitr::kable(time_data, caption = "Run time of regression models", digits = 3)
+```
+
+# Regression analysis
+
+Now for regression analysis, the focus is to predict the the target
+variable "Hours per week" with the help of rest of the features.
+
+# 5. Data preprocessing
+
+## 5.1. Exploratory data analysis
+
+In the exploratory analysis for predicting hours per week, the initial
+assessment of numeric features---final weight, capital gain, and capital
+loss---has provided crucial insights. Regarding final weight, the
+scatter plot showcases a nearly horizontal slope vs. hours per week.
+This pattern indicates a weak correlation, suggesting that final weight
+has limited influence on hours per week. Consequently, this feature will
+be excluded from subsequent analyses due to its minimal impact on
+predicting hours worked per week. Conversely, both capital gain and
+capital loss exhibit a positive slope in their respective scatter plots
+concerning hours per week. This positive trend signifies a notable
+correlation between these variables and hours worked per week. As a
+result, these features will be retained for further analysis,
+considering their apparent association with the target variable, hours
+per week.
+
+\pagebreak
+
+```{r R-EDA for numeric variable (1), echo=FALSE, fig.align='center', fig.cap="(a) Scatter plots of numeric features againts Hours per week", message=FALSE, warning=FALSE, out.width='85%'}
+
+regdata <- adultdata1
+#head(regdata)
+
+# rearranging target variable "Hours per week" in last column
+regdata <- regdata %>%
+  select(-`Hours per week`, everything(), `Hours per week`)
+
+# 1. Check relationship between numeric variables and HoursPerWeek
+edata2 <- regdata
+num_vars <- edata[, c("Final weight", "Capital gain", "Capital loss", "Hours per week")]
+
+s1 <- ggplot(num_vars, aes(x = `Final weight`, y = `Hours per week`)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = T, color = "blue") +  # Add linear regression line
+  labs(x = "Final weight", y = "Hours per week", title = "(a)") +
+  theme_light()+figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                               axis.text.x = element_text(angle = 45))
+
+s2 <- ggplot(num_vars, aes(x = `Capital gain`, y = `Hours per week`)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = T, color = "blue") +
+  labs(x = "Capital gain", y = "Hours per week", title = "(b)") +
+  theme_light()+figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                               axis.text.x = element_text(angle = 45))
+
+s3 <- ggplot(num_vars, aes(x = `Capital loss`, y = `Hours per week`)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = T, color = "blue") +  # Add linear regression line
+  labs(x = "Capital loss", y = "Hours per week", title = "(c)") +
+  theme_light()+figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                               axis.text.x = element_text(angle = 45))
+
+ggarrange(s1, s2, s3, nrow= 1, ncol = 3)
+
+```
+
+The box plot analysis conducted on hours per week across different
+categories within categorical features has yielded important insights.
+The variation in the distribution of hours per week among different
+categories within each categorical feature implies a distinct influence
+(association) of these categories on the target variable. This observed
+association between categorical features and hours per week signifies
+that these categorical variables hold relevance in explaining the
+variation in hours worked per week. Consequently, all categorical
+features will proceed for encoding (one hot encoding), ensuring the
+incorporation of each category as dummy variable into the modeling
+process to capture their influence on predicting hours per week
+accurately.
+
+```{r R-EDA for categorical variable (2), echo=FALSE, fig.align='center', fig.cap="(b) Box plot to observe the association between categorical features and Hours per week", message=FALSE, warning=FALSE, out.width='85%'}
+
+# 2. Check relationship between categorical variables and HoursPerWeek
+cat_vars <- regdata[, !names(regdata) %in% c("Final weight", "Capital gain", "Capital loss")]
+
+# Set a custom color palette
+my_colors <- c("#E69F00", "#56B4E9")#, "#009E73", "#F0E442", "#0072B2")
+my_colors1 <- c("#E69F00", "#56B4E9", "#009E73")#, "#F0E442", "#0072B2")
+my_colors2 <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442")#, "#0072B2")
+
+
+# Create the boxplot plot
+b1 <- ggplot(cat_vars) +
+  geom_boxplot(aes(x = as.factor(`Age category`), y = `Hours per week`),
+               fill = my_colors1, color = "black", outlier.shape = NA) +
+  labs(x = "Age category", y = "Hours per week") +
+  scale_fill_manual(values = my_colors1) + 
+  theme_light()+ figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                                                                axis.text.x = element_text(angle = 45))
+
+b2 <- ggplot(cat_vars) +
+  geom_boxplot(aes(x = as.factor(`Working class`), y = `Hours per week`),
+               fill = my_colors2, color = "black", outlier.shape = NA) +
+  labs(x = "Working class", y = "Hours per week") +
+  scale_fill_manual(values = my_colors2) + 
+  theme_light()+ figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                                axis.text.x = element_text(angle = 45))
+
+b3 <- ggplot(cat_vars) +
+  geom_boxplot(aes(x = as.factor(`Education`), y = `Hours per week`),
+               fill = my_colors1, color = "black", outlier.shape = NA) +
+  labs(x = "Education", y = "Hours per week") +
+  scale_fill_manual(values = my_colors1) +
+  theme_light()+ figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                                axis.text.x = element_text(angle = 45))
+
+b4 <- ggplot(cat_vars) +
+  geom_boxplot(aes(x = as.factor(`Marital status`), y = `Hours per week`),
+               fill = my_colors1, color = "black", outlier.shape = NA) +
+  labs(x = "Marital status", y = "Hours per week") +
+  scale_fill_manual(values = my_colors1) + 
+  theme_light()+ figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                                axis.text.x = element_text(angle = 45))
+
+b5 <- ggplot(cat_vars) +
+  geom_boxplot(aes(x = as.factor(`Occupation`), y = `Hours per week`),
+               fill = my_colors2, color = "black", outlier.shape = NA) +
+  labs(x = "Occupation", y = "Hours per week") +
+  scale_fill_manual(values = my_colors2) + 
+  theme_light()+ figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                                axis.text.x = element_text(angle = 45))
+
+b6 <- ggplot(cat_vars) +
+  geom_boxplot(aes(x = as.factor(`Race`), y = `Hours per week`),
+               fill = my_colors1, color = "black", outlier.shape = NA) +
+  labs(x = "Race", y = "Hours per week") +
+  scale_fill_manual(values = my_colors1) + 
+  theme_light()+ figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                                axis.text.x = element_text(angle = 45))
+
+b7 <- ggplot(cat_vars) +
+  geom_boxplot(aes(x = as.factor(`Sex`), y = `Hours per week`),
+               fill = my_colors, color = "black", outlier.shape = NA) +
+  labs(x = "Sex", y = "Hours per week") +
+  scale_fill_manual(values = my_colors) + 
+  theme_light()+ figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                                axis.text.x = element_text(angle = 45))
+
+
+b8 <- ggplot(cat_vars) +
+  geom_boxplot(aes(x = as.factor(`Income`), y = `Hours per week`),
+               fill = my_colors, color = "black", outlier.shape = NA) +
+  labs(x = "Income", y = "Hours per week") +
+  scale_fill_manual(values = my_colors) +
+  theme_light()+ figtheme+theme(title = element_text(hjust = 0.5, vjust = 0.5, face = "bold"),
+                                axis.text.x = element_text(angle = 45))
+
+
+ggarrange(b1, b2, b3, b4, b5, b6, b7, b8, nrow = 2, ncol = 4)
+
+
+```
+
+```{r R-One Hot Encoding, message=FALSE, warning=FALSE, include=FALSE}
+
+#---------------------------------
+# Encoding of categorical variable
+#---------------------------------
+fdata1 <- regdata[, !names(regdata) %in% c("Final weight")]
+#head(fdata)
+encode_var1 <- fdata1[, !names(fdata1) %in% c("Final weight", "Capital gain", "Capital loss", "Hours per week")]
+#head(encode_var1)
+nominal_variables1 <- names(encode_var1)
+# 1. making the variables of factor nature
+encode_var1$`Age category` <- factor(encode_var1$`Age category`,
+                                     levels = c( "Adult", "Elderly", "Adolescent"), 
+                                     labels = c(1,2,3))
+encode_var1$`Working class` <- factor(encode_var1$`Working class`,
+                                     levels = c("Government", "Self-employed", "Private", "Unemployed"), 
+                                     labels = c(1,2,3,4))
+encode_var1$Education <- factor(encode_var1$Education,
+                               levels = c("High", "Moderate", "Low"), 
+                               labels = c(1,2,3))
+encode_var1$`Marital status` <- factor(encode_var1$`Marital status`,
+                                      levels = c("Single","Married","Divorced"), 
+                                      labels = c(1,2,3))
+encode_var1$Occupation <- factor(encode_var1$Occupation,
+                                levels = c("OfficeWork", "Service", "Professional", "Other"), 
+                                labels = c(1,2,3,4))
+encode_var1$Race <- factor(encode_var1$Race,
+                          levels = c("White", "Black", "Other"), 
+                          labels = c(1,2,3))
+#unique(encode_var$Sex)
+encode_var1$Sex <- factor(encode_var1$Sex,
+                         levels = c("Male", "Female"), 
+                         labels = c(1,2))
+encode_var1$Income <- factor(encode_var1$Income,
+                          levels = c("<=50K", ">50K"), 
+                          labels = c(1,2))
+subset_edata1 <- encode_var1
+#head(subset_edata1)
+
+# 2. Apply one-hot encoding using dummyVars()
+encod1 <- dummyVars(~., data = subset_edata1, 
+                   fullRank = T)
+
+# Now transform with the one-hot encoding
+encodeddata1 <- as.data.frame(predict(encod1, newdata = subset_edata1))
+gh2 = cbind(encodeddata1,
+            fdata1[, !(names(fdata1) %in% nominal_variables1)])
+#head(gh2)
+#names(gh2)
+
+
+```
+
+## 5.2. Feature selection
+
+A feature selection process has been carried out with the help of Lasso
+regression to determine the significant features to be included in the
+final models. The feature selection process employing Lasso regression
+has effectively identified a subset of significant variables impacting
+income while reducing the dataset's dimensionality. From the
+coefficients graph presented, specific variables have emerged as
+influential factors for predicting income levels. Notably, features such
+as "Age elder", "Age adolescent", "Education moderate", "Marital status
+married", "Marital status divoreced","Occupation service", "Sex female",
+"Income \>50K", and "Capital gain", have been discerned as the final set
+of features crucial for subsequent classification modeling. These
+features exhibit considerable coefficients, signifying their substantial
+impact on determining income categories and warranting their utilization
+in the subsequent modeling phase.
+
+```{r R-Feature selection (1), echo=FALSE, fig.align='center', fig.cap="(b) Lasso coefficients showing impact on Hours per week", message=FALSE, warning=FALSE, out.width='70%'}
+#------------------------
+# Feature Selection
+#------------------------
+feature_data1 <- gh2 #dim(feature_data) #32561x23
+#head(feature_data1)
+set.seed(123)
+
+x1 <- as.matrix(feature_data1[,-which(names(feature_data1) %in% "Hours per week")])
+y1 <- matrix(feature_data$`Hours per week`)
+
+# Lasso Regression
+# best lambda using cross-validation
+cv.lasso1 <- cv.glmnet(x1, y1, alpha = 1, family = "gaussian")
+
+# Fit the final model 
+lasso.model1 <- glmnet(x1, y1, alpha = 1, family = "gaussian",
+                      lambda = cv.lasso1$lambda.1se)
+
+# regression coefficients from lasso
+lasso.coef1 <- coef(lasso.model1)
+
+# Convert the sparse matrix of coefficients to a data frame
+lasso_df1 <- as.data.frame(as.matrix(lasso.coef1))
+lasso_coeff1 <- lasso_df1[-1,]
+lasso_coeff1 <- round(as.numeric(format(lasso_coeff1, scientific = FALSE)),3)
+coeff_names1 <- c("AgeCategoryElderly", "AgeCategoryAdolescent","WorkingClassSelfEmp", "WorkingClassPrivate", "WorkingClassUnEmp",  
+                 "EducationMod", "EducationLow", "MaritalStatusMarried", "MaritalStatusDiv",
+                 "OccupationServ", "OccupationProfessional", "OccupationOthers", "RaceWhite", "RaceBlack", "SexFemale", "Income", "CapitalGain", "CapitalLoss")
+lasso_df1 <- data.frame(coeff_names1, lasso_coeff1)
+
+# Plotting with lines and points
+ggplot(lasso_df1, aes(x = reorder(coeff_names1, lasso_coeff1), y = lasso_coeff1)) +
+  geom_line(color = "blue", size = 1, alpha = 0.8, group = 1) +
+  geom_point(color = "red", size = 3) +
+  geom_text(aes(label = round(lasso_coeff1, 2)), hjust = 1, vjust = -0.5, size = 3, color = "black") +
+  theme_light() + figtheme+
+  labs(x = "Features", y = "Coefficient") +
+  coord_flip()
+
+selectedvar1 <- c("`Age category`2", "`Age category`3","Education.2", 
+                  "`Marital status`2", "`Marital status`3",
+                 "Occupation.2", "Sex.2","Income.2", 
+                 "Capital gain", "`Working class`2")
+#names(feature_data1)
+
+```
+
+\pagebreak
+
+```{r R-Feature selection (2), message=FALSE, warning=FALSE, include=FALSE}
+
+selected_var1 <- feature_data1[, selectedvar1]
+#head(selected_var1)
+selected_var1$HoursPerWeek <- feature_data1$`Hours per week`
+#final_dat1 <- data.frame(HoursPerWeek= feature_data$`Hours per week`,
+#                        selected_var)  #dim(final_dat) #32561 11 
+#final_dat1 <- selected_var1
+#head(final_dat)
+names(selected_var) <- c("AgeElder", "AgeAdolescent" , "EducationModerate", "MaritalStatusMarried", "MaritalStatusDivoreced","OccupationService",
+                       "SexFemale", "Income>50K","CapitalGain", "HoursPerWeek")
+
+```
+
+# 6. Data Analysis
+
+## 6.1. Data Splitting
+
+The dataset was partitioned into two distinct subsets, namely a training
+set and a testing set. The former was utilized for constructing the
+predictive model, whereas the latter was employed to evaluate its
+generalization performance. Specifically, data has been partitioned into
+the training and testing sets with 70 and 30% distribution.
+
+```{r R-Data splitting, message=FALSE, warning=FALSE, include=FALSE}
+#--------------------
+# Split data
+#--------------------
+HR1 <- selected_var1
+#head(HR1)
+
+set.seed(123)
+
+dataSplit <- initial_split(HR1, prop = 0.7, strata = HoursPerWeek)
+train_data <- training(dataSplit)
+test_data  <- testing(dataSplit)
+#head(test_data)
+
+# defining parameters for cross-validation
+CV_folds <- 5 # no. of folds
+CV_repeats <- 3 # no. of repeats
+
+train_control <- trainControl(method = "repeatedcv",
+                              number = CV_folds, 
+                              repeats = CV_repeats, 
+                              verboseIter = FALSE,
+                              sampling = "smote")
+
+# matrix of predictors
+trainX <- train_data[,-ncol(train_data)]
+testX <- test_data[,-ncol(train_data)]
+
+```
+
+## 6.2. Linear regression
+
+In the pursuit of predicting hours worked per week, a foundational step
+involved employing a linear regression model. The evaluation of this
+model yielded essential performance metrics, including Mean Absolute
+Error (MAE), Mean Squared Error (MSE), and Root Mean Squared Error
+(RMSE), offering crucial insights into the model's accuracy and
+precision. The MAE value stands at approximately 7.65. This metric
+represents the average absolute difference between the predicted and
+actual values of hours worked per week. Lower MAE values suggest better
+accuracy, indicating that, on average, the model's predictions are
+around 7.65 hours off from the actual values. The MSE is calculated at
+approximately 127.39. This metric measures the average squared
+difference between predicted and actual values. Higher MSE values
+indicate larger errors between predictions and actual values, with
+errors being squared before averaging, giving more weight to larger
+errors. The RMSE value is approximately 11.29. This metric represents
+the square root of the MSE and is measured in the same units as the
+target variable (hours per week). RMSE provides an estimation of how
+spread out the model's prediction errors are. Lower RMSE values signify
+better performance, indicating that, on average, the model's predictions
+deviate by approximately 11.29 hours from the actual values.
+
+These metrics collectively evaluate the accuracy and precision of the
+linear regression model in predicting hours worked per week. Lower
+values across MAE, MSE, and RMSE indicate better performance, suggesting
+that the model might be reasonably accurate in predicting hours per week
+based on the selected features and regression approach.
+
+```{r R-Linear regression , echo=FALSE, message=FALSE, warning=FALSE}
+#-----------------------
+# 1) Linear regression
+#-----------------------
+
+
+# Define the outcome variable
+outcome_var <- "HoursPerWeek"
+
+# Create train control without the sampling parameter
+train_control_lm <- trainControl(
+  method = "repeatedcv",
+  number = 5,
+  repeats = 3,
+  verboseIter = FALSE
+)
+
+# Linear regression model with cross-validation
+lm_model_time <- system.time({
+lm_model <- train(
+  x = trainX, 
+  y = train_data$HoursPerWeek, 
+  method = "lm", 
+  trControl = train_control_lm)
+})
+
+lm_model_summary <- summary(lm_model)
+# Predictions on train and test data
+#train_predictions <- predict(lm_model, newdata = trainX)
+test_predictions <- predict(lm_model, newdata = testX)
+
+# Assessing model performance on train and test data
+#train_rmse <- sqrt(mean((train_predictions - train_data[[outcome_var]])^2))
+test_mae <- mean(abs(test_predictions - test_data[[outcome_var]]))
+#test_r_squared <- cor(test_predictions, test_data[[outcome_var]])^2
+test_mse <- mean((test_predictions - test_data[[outcome_var]])^2)
+test_rmse <- sqrt(mean((test_predictions - test_data[[outcome_var]])^2))
+
+test_metrics_df <- data.frame(
+  Metric = c("MAE", "MSE", "RMSE"),
+  Value = c(test_mae, test_mse, test_rmse))
+
+knitr::kable(test_metrics_df, caption = "Performance measures of linear model", digits = 3)
+
+```
+
+## 6.3. Artificial neural network
+
+The Neural Network model, in comparison to the Linear Regression model,
+demonstrates higher prediction errors across all metrics---MAE, MSE, and
+RMSE. The larger values signify greater discrepancies between predicted
+and actual hours worked per week. This suggests that the Neural Network
+model might face challenges in accurately capturing the complex
+relationships within the data, leading to less precise predictions
+compared to the Linear Regression model.
+
+```{r R-ANN , echo=FALSE, message=FALSE, warning=FALSE}
+#-------------------------
+# 2 Neural network
+#------------------------
+
+# Neural network model with cross-validation
+nn_model_time <- system.time({
+  nn_model <- train(
+    x = trainX,
+    y = train_data$HoursPerWeek,
+    method = "nnet",
+    trControl = train_control_lm,  # Use the same train control as in the linear regression model
+    trace = FALSE
+  )
+})
+
+# Predictions on test data
+test_predictions_nn <- predict(nn_model, newdata = testX)
+
+# Assessing model performance on test data
+test_mae_nn <- mean(abs(test_predictions_nn - test_data[[outcome_var]]))
+#test_r_squared_nn <- cor(test_predictions_nn, test_data[[outcome_var]])^2
+test_mse_nn <- mean((test_predictions_nn - test_data[[outcome_var]])^2)
+test_rmse_nn <- sqrt(mean((test_predictions_nn - test_data[[outcome_var]])^2))
+
+test_metrics_df_nn <- data.frame(
+  Metric = c("MAE", "MSE", "RMSE"),
+  Value = c(test_mae_nn, test_mse_nn, test_rmse_nn))
+
+knitr::kable(test_metrics_df_nn, caption = "Performance measures of ANN", digits = 3)
+
+
+```
+
+## 6.4. XG boosting
+
+In comparison to both the Linear Regression and Neural Network models,
+the XGBoost model displays competitive performance metrics for
+predicting hours per week. It showcases lower errors across MAE, MSE,
+and RMSE compared to the Neural Network model, indicating better
+accuracy and precision in predictions. However, it slightly exceeds the
+Linear Regression model's RMSE, suggesting slightly higher deviations in
+predicted hours per week. Overall, the XGBoost model demonstrates robust
+performance, balancing accuracy and predictive power more effectively
+than the neural network while maintaining competitiveness with the
+linear regression approach.
+
+```{r R-XGB , echo=FALSE, message=FALSE, warning=FALSE}
+#-------------------------
+# 3) XG boost
+#-------------------------
+# Convert to matrix format if needed
+trainX_matrix <- as.matrix(trainX)
+trainY1 <- train_data$HoursPerWeek  # Assuming 'HoursPerWeek' is the target variable
+
+# Convert outcome variable to numeric if needed
+trainY1 <- as.numeric(trainY1)
+# Create xgb.DMatrix for training data
+dtrain <- xgb.DMatrix(data = trainX_matrix, label = trainY1)
+
+# Similarly, create xgb.DMatrix for test data if needed
+testX_matrix <- as.matrix(testX)
+testY <- test_data$HoursPerWeek
+testY <- as.numeric(testY)
+dtest <- xgb.DMatrix(data = testX_matrix, label = testY)
+
+# Proceed with training and evaluation
+xgb_model_time <- system.time({xgb_model <- xgb.train(data = dtrain, nrounds = 100, verbose = FALSE)
+})
+  
+test_predictions_xgb <- predict(xgb_model, newdata = dtest)
+
+# Compute evaluation metrics
+test_mae_xgb <- mean(abs(test_predictions_xgb - testY))
+#test_r_squared_xgb <- cor(test_predictions_xgb, testY)^2
+test_mse_xgb <- mean((test_predictions_xgb - testY)^2)
+test_rmse_xgb <- sqrt(mean((test_predictions_xgb - testY)^2))
+
+test_metrics_df_xgb <- data.frame(
+  Metric = c("MAE", "MSE", "RMSE"),
+  Value = c(test_mae_xgb, test_mse_xgb, test_rmse_xgb))
+
+knitr::kable(test_metrics_df_xgb, caption = "Performance measures of XG boosting", digits = 3)
+```
+
+## 6.5 Time taken to build model
+
+The time taken for each regression model's execution provides crucial
+insights into their computational efficiency. The comparison highlights
+the trade-off between computational time and model complexity. While the
+ANN model, being complex, took the longest time, the Linear Regression
+model, with its simplicity, executed the fastest. The XGBoost model
+struck a balance, exhibiting reasonable computational efficiency without
+compromising significantly on predictive power, making it an efficient
+choice for regression tasks.
+
+```{r R-Run Time, echo=FALSE, message=FALSE, warning=FALSE}
+#-------------------------
+# Running Time for each model
+#------------------------
+
+# Creating a data frame with model names and their respective times
+model_names1 <- c("Linear Model", "ANN Model", "XGBoost Model")
+elapsed_times1 <- c(lm_model_time["elapsed"], ann_model_time["elapsed"], xgboost_model_time["elapsed"])
+
+time_data1 <- data.frame(RegressionModels = model_names1,  Time = elapsed_times1)
+
+
+knitr::kable(time_data1, caption = "Run time of regression models", digits = 3)
+```
+
+# Conclusion
+
+In conclusion, our experiment revealed that the logistic regression model emerged as the most effective predictor for income, boasting an impressive 80% accuracy and an AUC of 0.886. Notably, this model exhibited efficient training, requiring only around 10 seconds on our machines.
+
+Through our analysis, we identified key variables strongly correlated with higher income. Marital status, higher capital gain, increased working hours, and advanced education were found to be pivotal factors influencing an individual's earnings. These four features demonstrated a significant impact on predicting income levels.
+
+In the realm of regression modeling, linear regression outperformed alternatives, particularly in forecasting working hours per week. With a commendable MAE score of 7.634, linear regression surpassed XGBoosting, and remarkably, this model demanded a mere one second for training on our systems.
+
+Our findings underscored the significance of income and self-employment status as pivotal contributors to working hours. As anticipated, individuals with their own businesses tend to invest more time, aligning with the observed correlation between self-employment and working hours.
+
+In essence, our comprehensive analysis not only identified robust predictive models but also shed light on the influential variables shaping income and working hours. These insights contribute to a deeper understanding of the intricate dynamics governing economic factors.
